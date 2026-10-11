@@ -1,0 +1,11 @@
+services:
+  backtrack:
+    image: nginx:alpine
+    container_name: backtrack
+    restart: unless-stopped
+    ports:
+      - "172.17.0.1:3050:80"
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./style.css:/usr/share/nginx/html/style.css:ro
+      - ./app.js:/usr/share/nginx/html/app.js:ro

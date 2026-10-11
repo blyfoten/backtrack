@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backtrack</title>
+<meta name="description" content="Backing track generator: classic chord progressions by genre, or build your own. Letters or Roman numerals.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232C4FD8'/%3E%3Cpath d='M9 8v16M15 12v12M21 6v18M27 14v10' stroke='%23F0A445' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">Backtrack</span>
+    <span class="tag">a band that never gets tired</span>
+  </div>
+  <div class="seg" role="group" aria-label="Chord notation" id="notation">
+    <button type="button" data-n="letters">Letters <span>C G Am</span></button>
+    <button type="button" data-n="roman">Roman <span>I V vi</span></button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="stage" aria-label="Player">
+    <div class="now" id="now">
+      <div class="now-main">
+        <div class="label" id="nowLabel">Now</div>
+        <div class="chord-big" id="nowChord" aria-live="off"></div>
+        <div class="alt" id="nowAlt"></div>
+      </div>
+      <div class="now-side">
+        <div class="label">Next</div>
+        <div class="chord-mid" id="nextChord"></div>
+        <div class="beats" id="beats" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="barcount" id="barCount"></div>
+      </div>
+    </div>
+
+    <div class="transport">
+      <button type="button" id="play" class="play" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="ic-play"><path d="M7 4.5v15l12.5-7.5z"/></svg>
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="ic-stop"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+        <span id="playLabel">Play</span>
+      </button>
+      <div class="ctl tempo">
+        <label for="tempo">Tempo</label>
+        <div class="row"><input type="range" id="tempo" min="40" max="220" step="1"><output id="tempoOut" for="tempo"></output><small>BPM</small></div>
+      </div>
+      <div class="ctl">
+        <label for="key">Key</label>
+        <div class="row"><select id="key"></select><select id="mode" aria-label="Mode"><option value="major">major</option><option value="minor">minor</option></select></div>
+      </div>
+      <div class="ctl">
+        <label for="style">Groove</label>
+        <select id="style"></select>
+      </div>
+      <div class="ctl swing">
+        <label for="swing">Swing</label>
+        <div class="row"><input type="range" id="swing" min="0" max="100" step="1"><output id="swingOut" for="swing"></output></div>
+      </div>
+      <label class="check"><input type="checkbox" id="countin"> Count-in</label>
+    </div>
+
+    <div class="prog-head">
+      <h1 id="progTitle"></h1>
+      <span class="meta" id="progMeta"></span>
+    </div>
+    <div class="strip" id="strip" role="list" aria-label="Chord progression"></div>
+
+    <div class="editor" id="editor" hidden>
+      <div class="ed-row">
+        <span class="ed-label">Degree</span>
+        <div class="btns" id="edDeg"></div>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">Accidental</span>
+        <div class="btns" id="edAcc"></div>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">Chord type</span>
+        <div class="btns" id="edQual"></div>
+      </div>
+      <div class="ed-row">
+        <span class="ed-label">Length</span>
+        <div class="btns" id="edLen"></div>
+      </div>
+      <div class="ed-actions">
+        <button type="button" data-act="left">Move left</button>
+        <button type="button" data-act="right">Move right</button>
+        <button type="button" data-act="dup">Duplicate</button>
+        <button type="button" data-act="del" class="danger">Remove</button>
+        <button type="button" data-act="close" class="ghost">Done</button>
+      </div>
+    </div>
+
+    <div class="typer">
+      <label for="progText">Type a progression</label>
+      <form class="row" id="textForm">
+        <input id="progText" autocomplete="off" spellcheck="false">
+        <button type="submit">Apply</button>
+      </form>
+      <p class="hint" id="textHint">Letters (<code>G D Em C</code>) or Roman numerals (<code>ii7 V7 Imaj7</code>). Chords last one bar; add <code>:2</code> for two beats or <code>:8</code> for two bars.</p>
+    </div>
+
+    <div class="lower">
+      <div class="mixer" aria-label="Mixer">
+        <h2>Mix</h2>
+        <div class="fader"><label for="mixDrums">Drums</label><input type="range" id="mixDrums" min="0" max="100"></div>
+        <div class="fader"><label for="mixBass">Bass</label><input type="range" id="mixBass" min="0" max="100"></div>
+        <div class="fader"><label for="mixChords">Chords</label><input type="range" id="mixChords" min="0" max="100"></div>
+      </div>
+      <form class="save" id="saveForm">
+        <h2>Keep this one</h2>
+        <div class="row">
+          <input id="saveName" placeholder="Name it, e.g. Verse idea" maxlength="40" autocomplete="off">
+          <button type="submit">Save</button>
+        </div>
+        <p class="hint" id="saveHint">Saved progressions stay in this browser.</p>
+      </form>
+    </div>
+  </section>
+
+  <aside class="library" id="library" aria-label="Progressions"></aside>
+</main>
+
+<footer class="foot">Space plays and stops. Click a chord to edit it.</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
