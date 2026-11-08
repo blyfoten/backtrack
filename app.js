@@ -218,6 +218,47 @@ function loadPreset(p, { keepTempo = false } = {}) {
 }
 function parseRoman(text) { return parseProg(text); } // Roman tokens never depend on the key
 
+// Diatonic chords per degree: [root accidental vs major scale, triad family, seventh quality]
+const DIATONIC = {
+  major: [[0, 'maj', 'maj7'], [0, 'm', 'm7'], [0, 'm', 'm7'], [0, 'maj', 'maj7'], [0, 'maj', '7'], [0, 'm', 'm7'], [0, 'dim', 'm7b5']],
+  minor: [[0, 'm', 'm7'], [0, 'dim', 'm7b5'], [-1, 'maj', 'maj7'], [0, 'm', 'm7'], [0, 'm', 'm7'], [-1, 'maj', 'maj7'], [-1, 'maj', '7']],
+};
+const FAMILY = { maj: 'maj', '7': 'maj', maj7: 'maj', '6': 'maj', '9': 'maj', m: 'm', m7: 'm', m6: 'm', m9: 'm',
+  dim: 'dim', m7b5: 'dim', dim7: 'dim', sus2: '*', sus4: '*', '5': '*' };
+const SEVENTHS = new Set(['7', 'maj7', 'm7', 'm7b5']);
+
+// Move a chord to the parallel key: diatonic chords in `from` become the matching diatonic chord in `to`
+// (vi -> ♭VI, IV -> iv, ii7 -> iiø7 ...). V and vii° are left alone since they're idiomatic in both modes
+// (the minor v still becomes V in major). Chromatic/borrowed chords are kept as they are.
+function convertChord(ch, from, to) {
+  const i = ch.d - 1, fam = FAMILY[ch.q];
+  const [sAcc, sFam, s7] = DIATONIC[from][i], [tAcc, tFam, t7] = DIATONIC[to][i];
+  if (i === 6 || (i === 4 && to === 'minor')) return ch;
+  if (!fam || ch.acc !== sAcc || (fam !== '*' && fam !== sFam)) return ch;
+  let q = ch.q;
+  if (fam !== '*') {
+    if (ch.q === '7' && (i === 0 || i === 3)) q = tFam === 'm' ? 'm7' : '7';   // bluesy I7/IV7 <-> i7/iv7
+    else if (ch.q === s7) q = t7;
+    else if (SEVENTHS.has(ch.q)) return ch;   // e.g. ♭VI7 in minor is a chromatic dominant, not diatonic
+    else if (ch.q === '6' || ch.q === 'm6') q = tFam === 'maj' ? '6' : tFam === 'm' ? 'm6' : 'dim';
+    else if (ch.q === '9' || ch.q === 'm9') q = tFam === 'maj' ? '9' : tFam === 'm' ? 'm9' : 'm7b5';
+    else if (ch.q === 'dim7') q = tFam === 'dim' ? 'dim7' : tFam;
+    else q = tFam;
+  }
+  return { ...ch, acc: tAcc, q };
+}
+
+let modeUndo = null;   // lets major -> minor -> major restore the original chords if nothing was edited in between
+function setMode(mode) {
+  if (mode === state.mode) return;
+  const before = progText(state.prog, 'roman');
+  if (modeUndo && modeUndo.mode === mode && modeUndo.after === before) state.prog = parseRoman(modeUndo.prog);
+  else state.prog = state.prog.map((c) => convertChord(c, state.mode, mode));
+  modeUndo = { mode: state.mode, prog: before, after: progText(state.prog, 'roman') };
+  state.mode = mode;
+  if (before !== modeUndo.after) markCustom();
+}
+
 function markCustom() {
   if (state.presetId) { state.title = state.title + ' (edited)'; state.presetId = null; }
 }
@@ -234,6 +275,7 @@ function initAudio() {
   driveCurve = new Float32Array(1024);
   for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; driveCurve[i] = Math.tanh(x * 4); }
   makeBuses();
+  decodeSamples();
 }
 function makeBuses() {
   const comp = ctx.createDynamicsCompressor();
@@ -273,9 +315,42 @@ function filter(type, freq, dest, q = 0.7) {
   const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q; f.connect(dest); return f;
 }
 
-// Drums
+// Drums: recorded samples (samples/*.wav, made by tools/convert_drums.py), with the synth below as a
+// fallback until they have loaded. Lanes: k kick, s snare, h/o closed/open hat, r ride, c cross-stick, x crash.
 let openHat = null;
-const DRUM = {
+const SAMPLE_LANES = { k: 'kick', s: 'snare', h: 'hihat_closed', o: 'hihat_open', r: 'ride', c: 'snare_rim', x: 'crash' };
+const LAYERS = [[0.9, '127', 1], [0.5, '085', 0.67], [0, '040', 0.31]];   // [min velocity, file suffix, its loudness]
+const SAMPLE_GAIN = 0.9;
+const sampleFiles = {}, sampleBuf = {};
+for (const name of Object.values(SAMPLE_LANES)) {
+  for (const [, v] of LAYERS) {
+    const key = `${name}_v${v}`;
+    sampleFiles[key] = fetch(`samples/${key}.wav`).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+  }
+}
+function decodeSamples() {
+  for (const [key, file] of Object.entries(sampleFiles)) {
+    file.then((ab) => ab && ctx.decodeAudioData(ab)).then((buf) => { if (buf) sampleBuf[key] = buf; }).catch(() => {});
+  }
+}
+function playSample(lane, t, v) {
+  const [, suffix, loud] = LAYERS.find(([min]) => v >= min);
+  const buf = sampleBuf[`${SAMPLE_LANES[lane]}_v${suffix}`];
+  if (!buf) return false;
+  const g = gainNode(buses.drums, (v / loud) * SAMPLE_GAIN);
+  const src = ctx.createBufferSource(); src.buffer = buf; src.connect(g); src.start(t);
+  if (lane === 'o') openHat = g;
+  return true;
+}
+function chokeHat(t) {
+  if (openHat) { openHat.gain.cancelScheduledValues(t); openHat.gain.setTargetAtTime(0, t, 0.01); openHat = null; }
+}
+const DRUM = Object.fromEntries(Object.keys(SAMPLE_LANES).map((lane) => [lane, (t, v) => {
+  if (lane === 'h') chokeHat(t);
+  if (!playSample(lane, t, v)) (SYNTH[lane] || SYNTH.o)(t, v);
+}]));
+
+const SYNTH = {
   k(t, v) {
     const g = gainNode(buses.drums);
     g.gain.setValueAtTime(v * 1.1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
@@ -325,10 +400,12 @@ const VOICE = {
     const g = gainNode(buses.bass);
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v * 0.55, t + 0.006);
     g.gain.setTargetAtTime(v * 0.35, t + 0.01, 0.25); g.gain.setTargetAtTime(0, end, 0.03);
-    const f = filter('lowpass', 1500, g, 1.5);
-    f.frequency.setValueAtTime(1500, t); f.frequency.setTargetAtTime(420, t + 0.01, 0.08);
-    osc('sawtooth', mtof(m), t, end + 0.2, f);
+    // mostly sine/triangle with a little filtered saw for definition on small speakers
+    const f = filter('lowpass', 900, g, 0.7);
+    f.frequency.setValueAtTime(900, t); f.frequency.setTargetAtTime(280, t + 0.01, 0.1);
     osc('sine', mtof(m), t, end + 0.2, f);
+    osc('triangle', mtof(m), t, end + 0.2, gainNode(f, 0.6));
+    osc('sawtooth', mtof(m), t, end + 0.2, gainNode(f, 0.22));
   },
   keys(m, t, dur, v) {
     const end = t + dur;
@@ -399,7 +476,7 @@ function voicing(ch, { power = false, rootless = false } = {}) {
   const notes = iv.map((i) => { let n = 48 + mod12(pc + i); while (n < 53) n += 12; while (n > 67) n -= 12; return n; });
   return [...new Set(notes)].sort((a, b) => a - b);
 }
-const bassBase = (pc) => 33 + mod12(pc - 9);   // A1..G#2
+const bassBase = (pc) => 21 + mod12(pc - 9);   // A0..G#1
 function bassTone(ch, tone) {
   const root = bassBase(chordPc(ch)), iv = QUAL[ch.q].iv;
   switch (tone) {
@@ -411,7 +488,7 @@ function bassTone(ch, tone) {
     default: return root;
   }
 }
-let lastWalk = 40;
+let lastWalk = 28;
 function walkNote(ch, local, nextCh) {
   const root = bassBase(chordPc(ch));
   const left = ch.beats * 4 - local;
@@ -426,7 +503,7 @@ function walkNote(ch, local, nextCh) {
   // choose the octave closest to the previous note, inside the bass range
   let best = target, dist = 99;
   for (const n of [target - 12, target, target + 12]) {
-    if (n < 28 || n > 52) continue;
+    if (n < 16 || n > 40) continue;
     const dd = Math.abs(n - lastWalk);
     if (dd < dist) { dist = dd; best = n; }
   }
@@ -474,7 +551,7 @@ function scheduleStep(n, t) {
     const c = pat[bs];
     if (c !== '.') DRUM[lane](t, VEL[c]);
   }
-  if (s === 0 && state.style !== 'jazz' && state.style !== 'bossa') DRUM.o(t, 0.9);
+  if (s === 0 && state.style !== 'jazz' && state.style !== 'bossa') DRUM.x(t, 0.72);
 
   if (st.bass === 'walk') {
     if (bs % 4 === 0) VOICE.bass(walkNote(ch, local, nextCh), t, sd * 3.6, 0.85);
@@ -697,7 +774,7 @@ document.addEventListener('keydown', (e) => {
 $('#tempo').addEventListener('input', (e) => { state.bpm = +e.target.value; $('#tempoOut').textContent = state.bpm; renderControls(); });
 $('#swing').addEventListener('input', (e) => { state.swing = +e.target.value; $('#swingOut').textContent = state.swing + '%'; });
 $('#key').addEventListener('change', (e) => { state.key = +e.target.value; store.set('key', state.key); renderAll(); });
-$('#mode').addEventListener('change', (e) => { state.mode = e.target.value; renderAll(); });
+$('#mode').addEventListener('change', (e) => { setMode(e.target.value); renderAll(); });
 $('#style').innerHTML = Object.entries(STYLES).map(([k, s]) => `<option value="${k}">${s.name}</option>`).join('');
 $('#style').addEventListener('change', (e) => { state.style = e.target.value; state.swing = STYLES[state.style].swing; renderControls(); });
 $('#countin').addEventListener('change', (e) => { state.countIn = e.target.checked; store.set('countIn', state.countIn); });
