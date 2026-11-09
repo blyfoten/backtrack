@@ -329,8 +329,10 @@ for (const name of Object.values(SAMPLE_LANES)) {
   }
 }
 function decodeSamples() {
-  for (const [key, file] of Object.entries(sampleFiles)) {
-    file.then((ab) => ab && ctx.decodeAudioData(ab)).then((buf) => { if (buf) sampleBuf[key] = buf; }).catch(() => {});
+  for (const [files, buffers] of [[sampleFiles, sampleBuf], [bassFiles, bassBuf]]) {
+    for (const [key, file] of Object.entries(files)) {
+      file.then((ab) => ab && ctx.decodeAudioData(ab)).then((buf) => { if (buf) buffers[key] = buf; }).catch(() => {});
+    }
   }
 }
 function playSample(lane, t, v) {
@@ -345,6 +347,36 @@ function playSample(lane, t, v) {
 function chokeHat(t) {
   if (openHat) { openHat.gain.cancelScheduledValues(t); openHat.gain.setTargetAtTime(0, t, 0.01); openHat = null; }
 }
+// Bass: a recorded electric bass (samples/bass/, CC0, made by tools/fetch_bass.sh), one 2-second
+// note per semitone from B0 to B2 in a softer and a harder take, with the synth as a fallback until
+// they have loaded. Notes outside that range play the nearest recording at another speed.
+const BASS_LOW = 23, BASS_HIGH = 47;
+const BASS_GAIN = 3.9;                                   // matches the synth bass's loudness through the mix
+const BASS_HARD_STYLES = new Set(['rock', 'funk', 'dance']);
+const BASS_RELEASE = 0.04;                               // letting go: quick, without a click
+const BASS_END_FADE = 0.35;                              // a note held to the end of its recording dies away
+const bassFiles = {}, bassBuf = {};
+for (let m = BASS_LOW; m <= BASS_HIGH; m++) {
+  for (const take of ['mp', 'f']) {
+    const key = `bass_${m}_${take}`;
+    bassFiles[key] = fetch(`samples/bass/${key}.wav`).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+  }
+}
+function playBassSample(m, t, dur, v) {
+  const note = Math.min(Math.max(m, BASS_LOW), BASS_HIGH);
+  const buf = bassBuf[`bass_${note}_${BASS_HARD_STYLES.has(state.style) ? 'f' : 'mp'}`];
+  if (!buf) return false;
+  const rate = Math.pow(2, (m - note) / 12);
+  const length = buf.duration / rate;
+  const [hold, fade] = dur + BASS_RELEASE >= length - BASS_END_FADE ? [length - BASS_END_FADE, BASS_END_FADE] : [dur, BASS_RELEASE];
+  const g = gainNode(buses.bass, v * BASS_GAIN);
+  g.gain.setValueAtTime(v * BASS_GAIN, t + hold);
+  g.gain.linearRampToValueAtTime(0, t + hold + fade);
+  const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate; src.connect(g);
+  src.start(t); src.stop(t + hold + fade + 0.01);
+  return true;
+}
+
 const DRUM = Object.fromEntries(Object.keys(SAMPLE_LANES).map((lane) => [lane, (t, v) => {
   if (lane === 'h') chokeHat(t);
   if (!playSample(lane, t, v)) (SYNTH[lane] || SYNTH.o)(t, v);
@@ -396,6 +428,7 @@ const VEL = { X: 1, x: 0.72, g: 0.3 };
 // Pitched voices: play(midi, start, duration, velocity, bus)
 const VOICE = {
   bass(m, t, dur, v) {
+    if (playBassSample(m, t, dur, v)) return;
     const end = t + dur;
     const g = gainNode(buses.bass);
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v * 0.55, t + 0.006);
