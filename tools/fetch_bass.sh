@@ -6,9 +6,9 @@
 #
 # The library's file names use an octave number one HIGHER than scientific pitch:
 # darkblack_e2_*.wav sounds E1 (41.2 Hz), checked by analysing the harmonics, so the
-# rule is  midi = octave_digit * 12 + pitch_class  (b1 -> 23, e2 -> 28).
+# rule is  midi = octave_digit * 12 + pitch_class  (e2 -> 28, e4 -> 52).
 #
-# Keeps B0 to B2 (MIDI 23-47), the range Backtrack's bass plays in, at two strengths:
+# Keeps E1 to E3 (MIDI 28-52), the range Backtrack's bass plays in, at two strengths:
 # mp (softer) and f (harder). 24 kHz is plenty for a bass and halves the download.
 #
 # Needs curl and ffmpeg.  Usage:  tools/fetch_bass.sh [outdir]
@@ -29,7 +29,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 FADE_START="$(awk -v t="$TRIM" -v f="$FADE" 'BEGIN{printf "%.3f", t-f}')"
 NAMES=(c db d eb e f gb g ab a bb b)
 
-for midi in $(seq 23 47); do
+for midi in $(seq 28 52); do
   name="${NAMES[$((midi % 12))]}$((midi / 12))"
   for layer in $LAYERS; do
     src="darkblack_${name}_${layer}_rr1.wav"

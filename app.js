@@ -348,10 +348,12 @@ function chokeHat(t) {
   if (openHat) { openHat.gain.cancelScheduledValues(t); openHat.gain.setTargetAtTime(0, t, 0.01); openHat = null; }
 }
 // Bass: a recorded electric bass (samples/bass/, CC0, made by tools/fetch_bass.sh), one 2-second
-// note per semitone from B0 to B2 in a softer and a harder take, with the synth as a fallback until
+// note per semitone from E1 to E3 in a softer and a harder take, with the synth as a fallback until
 // they have loaded. Notes outside that range play the nearest recording at another speed.
-const BASS_LOW = 23, BASS_HIGH = 47;
-const BASS_GAIN = 3.9;                                   // matches the synth bass's loudness through the mix
+const BASS_LOW = 28, BASS_HIGH = 52;
+// Gains that bring each take to the synth bass's level through the mix. The harder take's plucks
+// peak about 10 dB above the softer one's, and peaks are what drive the compressor into distortion.
+const BASS_GAIN = { mp: 3.9, f: 2.0 };
 const BASS_HARD_STYLES = new Set(['rock', 'funk', 'dance']);
 const BASS_RELEASE = 0.04;                               // letting go: quick, without a click
 const BASS_END_FADE = 0.35;                              // a note held to the end of its recording dies away
@@ -364,13 +366,15 @@ for (let m = BASS_LOW; m <= BASS_HIGH; m++) {
 }
 function playBassSample(m, t, dur, v) {
   const note = Math.min(Math.max(m, BASS_LOW), BASS_HIGH);
-  const buf = bassBuf[`bass_${note}_${BASS_HARD_STYLES.has(state.style) ? 'f' : 'mp'}`];
+  const take = BASS_HARD_STYLES.has(state.style) ? 'f' : 'mp';
+  const buf = bassBuf[`bass_${note}_${take}`];
   if (!buf) return false;
+  const gain = v * BASS_GAIN[take];
   const rate = Math.pow(2, (m - note) / 12);
   const length = buf.duration / rate;
   const [hold, fade] = dur + BASS_RELEASE >= length - BASS_END_FADE ? [length - BASS_END_FADE, BASS_END_FADE] : [dur, BASS_RELEASE];
-  const g = gainNode(buses.bass, v * BASS_GAIN);
-  g.gain.setValueAtTime(v * BASS_GAIN, t + hold);
+  const g = gainNode(buses.bass, gain);
+  g.gain.setValueAtTime(gain, t + hold);
   g.gain.linearRampToValueAtTime(0, t + hold + fade);
   const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate; src.connect(g);
   src.start(t); src.stop(t + hold + fade + 0.01);
@@ -509,7 +513,7 @@ function voicing(ch, { power = false, rootless = false } = {}) {
   const notes = iv.map((i) => { let n = 48 + mod12(pc + i); while (n < 53) n += 12; while (n > 67) n -= 12; return n; });
   return [...new Set(notes)].sort((a, b) => a - b);
 }
-const bassBase = (pc) => 21 + mod12(pc - 9);   // A0..G#1
+const bassBase = (pc) => 28 + mod12(pc - 4);   // E1..D#2: from a bass guitar's lowest string up
 function bassTone(ch, tone) {
   const root = bassBase(chordPc(ch)), iv = QUAL[ch.q].iv;
   switch (tone) {
@@ -521,7 +525,7 @@ function bassTone(ch, tone) {
     default: return root;
   }
 }
-let lastWalk = 28;
+let lastWalk = 33;
 function walkNote(ch, local, nextCh) {
   const root = bassBase(chordPc(ch));
   const left = ch.beats * 4 - local;
@@ -536,7 +540,7 @@ function walkNote(ch, local, nextCh) {
   // choose the octave closest to the previous note, inside the bass range
   let best = target, dist = 99;
   for (const n of [target - 12, target, target + 12]) {
-    if (n < 16 || n > 40) continue;
+    if (n < 28 || n > 47) continue;
     const dd = Math.abs(n - lastWalk);
     if (dd < dist) { dist = dd; best = n; }
   }
